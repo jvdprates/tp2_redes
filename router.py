@@ -16,7 +16,9 @@ parser.add_argument("-s", "--startup_commands",
                     help='O nome de um arquivo .txt contendo comandos de teclado para adicionar links')
 args = parser.parse_args()
 # ./router.py <ADDR> <PERIOD> [STARTUP]
+# python router.py 127.0.1.0 10
 
+# Argumentos
 ADDR = args.addr
 PI = args.period
 STARTUP = args.startup_commands
@@ -50,15 +52,44 @@ printSuccess("Roteador vinculado ao endereço {}/{}".format(ADDR, PORT))
 if STARTUP:
     printSuccess("Arquivos recebido", "{}".format(STARTUP), "Nome do arquivo")
     
+#Variavel local que guarda endereços, tabela de roteamento
+routes = []
+class Address:
+    def __init__(self, address, weight):
+        self.addr = address
+        self.weight = weight
+    def printAddress(self):
+        print("{ address: " + self.addr + ", weight: " + self.weight + " }")
+
+def printAddressList(list):
+    print("Lista: \n[")
+    for i in list:
+        i.printAddress()
+    print("]")
+        
 # Espera o comando do usuario
 print("Para fechar, digite 'q', 'quit' ou ctrl+c")
 command, args = get_input()
 # printSuccess("Input recebido", "{} - {}".format(command, args), "Inputs:")
 while command not in ["q", "quit"]:
+    address = args[0]
+    if len(args) > 1:
+        weight = args[1]
     if command == 'add':
-        printSuccess("Adicionar!")
+        if not any(x for x in routes if x.addr == address):
+            routes.append(Address(address, weight))
+            printSuccess("Endereço adicionado!")
+            printAddressList(routes)
+        else:
+            printError("Endereço já existe na lista!")
     elif command == 'del':
-        printSuccess("Deletar!")
+        index = next((x for x, item in enumerate(routes) if item.addr == address), None)
+        if index != None:
+            routes.pop(index)
+            printSuccess("Endereço removido!")
+            printAddressList(routes)
+        else:
+            printError("Endereço não existe na lista!")
     elif command == 'trace':
         printSuccess("Trace!")
     else:
