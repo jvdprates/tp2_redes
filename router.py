@@ -20,8 +20,8 @@ parser.add_argument("-s", "--startup_commands",
 args = parser.parse_args()
 # ./router.py <ADDR> <PERIOD> [STARTUP]
 # python router.py 127.0.1.0 10
-# add 127.0.1.1 5
-# send 127.0.1.3 data
+# add 127.0.1.1 1
+# send 127.0.1.2 data
 
 # Argumentos
 ADDR = args.addr
@@ -145,12 +145,12 @@ def getShortestFromSelf(destination):
     printSuccess("routeTable", routeTable)
     printSuccess("routes", routes)
     for route in routes:
-        G.add_edge(ADDR, route["addr"], weight = route["weight"])
+        G.add_edge(ADDR, route["addr"], weight = float(route["weight"]))
     for top in routeTable:
         if top != ADDR:
             for sub in routeTable[top]:
                 wei = routeTable[top][sub]
-                G.add_edge(top, sub, weight = wei)
+                G.add_edge(top, sub, weight = float(wei))
     return single_source_dijkstra(G, ADDR, destination)
 
 # Espera o comando do usuario
