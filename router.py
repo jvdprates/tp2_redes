@@ -20,13 +20,13 @@ parser.add_argument("-s", "--startup_commands",
 args = parser.parse_args()
 # ./router.py <ADDR> <PERIOD> [STARTUP]
 # python router.py 127.0.1.0 10
-# add 127.0.1.1 1
+# add 127.0.1.2 1
 # send 127.0.1.3 DOMINGO
 # trace 127.0.1.3
 
 # Argumentos
 ADDR = args.addr
-PI = args.period
+PI = float(args.period)
 STARTUP = args.startup_commands
 
 # Busca um input do usuário
@@ -63,6 +63,9 @@ routes = []
 
 # Variavel local que guarda uma tabela de endereços recebidos
 routeTable = {}
+
+# Variavel local que guarda os roteadores conectados
+connectedRouters = []
 
 # Imprime uma lista de endereços
 def printAddressList(list):
@@ -106,20 +109,77 @@ def createJSON(obj, type):
 def updateTh():
     while True:
         for i in routes:
-            data = createJSON({"destination": i["addr"], "source": ADDR}, "update")
+            data = createJSON(
+                {"destination": i["addr"], "source": ADDR}, "update")
             socket.sendto(bytes(data, "UTF-8"), (i["addr"], PORT))
         time.sleep(int(PI))
+        
 threading.Thread(target=updateTh, daemon=True).start()
+
+# Imprime uma lista usando uma key de seu dicionario
+def printObjList(list, key):
+    print("[")
+    for i in list:
+        print("{}".format(i[key]))
+    print("]")
+
+# Registra um roteador na lista de update
+def registerUpdate(source):
+    selected = next((x for x in connectedRouters
+                    if x["source"] == source), None)
+    newTime = time.time()
+    if not selected:
+        printSuccess("Registrando novo roteador")
+        connectedRouters.append({
+            "source": source,
+            "isFirstTime": True,
+            "lastUpdate": newTime,
+            "meanTime": None
+        })
+        printSuccess("Conectados:")
+        printObjList(connectedRouters, "source")
+    elif selected["isFirstTime"] == True:
+        # Segundo update detectado
+        selected["meanTime"] = newTime - selected["lastUpdate"]
+        selected["lastUpdate"] = newTime
+        selected["isFirstTime"] = False
+    else:
+        # Novo update detectado
+        selected["lastUpdate"] = newTime   
+
+# Função que monitora periodicamente se as conexões de outros roteadores ainda estão ligadas
+def checkTh():
+    while True:
+        currentTime = time.time()
+        popList = []
+        for idx, val in enumerate(connectedRouters):
+            source = val["source"]
+            if val["isFirstTime"] == False and (currentTime - val["lastUpdate"]) > (val["meanTime"] + PI/2):
+                routeTable.pop(source)
+                popList.append({"idx": idx, "val": val["source"]})
+            elif val["isFirstTime"] == True:
+                if currentTime - val["lastUpdate"] > 10*PI:
+                    routeTable.pop(source)
+                    popList.append({"idx": idx, "val": val["source"]})
+        if len(popList) > 0:
+            printError("Timeout de conexões:")
+            printObjList(popList, "val")
+        for x in popList:
+            connectedRouters.pop(x["idx"])
+        time.sleep(PI/2)
+        
+threading.Thread(target=checkTh, daemon=True).start()
 
 # Função que recebe as mensagens de outros roteadores
 def receiveTh():
     while True:
         data = socket.recv(1024)
         message = json.loads(data.decode("UTF-8"))
-        
+
         if message['type'] == "update":
             routeTable[message["source"]] = message["distances"]
-            
+            registerUpdate(message["source"])
+
         elif message['type'] == "trace":
             destination = message["destination"]
             source = message["source"]
@@ -129,7 +189,8 @@ def receiveTh():
                 if shortest and distance > 0:
                     sendTrace(shortest, destination, source, hops)
                 else:
-                    printError("Destino não encontrado", "Não foi possível traçar uma rota para o destino escolhido pela mensagem a ser encaminhada")
+                    printError("Destino não encontrado",
+                               "Não foi possível traçar uma rota para o destino escolhido pela mensagem a ser encaminhada")
             else:
                 message["hops"].append(ADDR)
                 printSuccess("Trace recebido!", message["hops"], "Hops:")
@@ -137,43 +198,48 @@ def receiveTh():
                 if shortest and distance > 0:
                     sendPayload(shortest, source, destination, message)
                 else:
-                    printError("Destino não encontrado", "Não foi possível traçar uma rota para o destino escolhido pela mensagem a ser encaminhada")
-                
+                    printError("Destino não encontrado",
+                               "Não foi possível traçar uma rota para o destino escolhido pela mensagem a ser encaminhada")
+
         elif message['type'] == "data":
             destination = message["destination"]
             source = message["source"]
             payload = message["payload"]
-            if destination != ADDR: 
+            if destination != ADDR:
                 distance, shortest = getShortestFromSelf(destination)
                 if shortest and distance > 0:
                     sendPayload(shortest, destination, source, payload)
                 else:
-                    printError("Destino não encontrado", "Não foi possível traçar uma rota para o destino escolhido pela mensagem a ser encaminhada")
+                    printError("Destino não encontrado",
+                               "Não foi possível traçar uma rota para o destino escolhido pela mensagem a ser encaminhada")
             else:
                 printSuccess("Mensagem recebida!", message, "Mensagem:")
+
 threading.Thread(target=receiveTh, daemon=True).start()
 
 # Função que envia um data a um endereço
 def sendPayload(shortest, destination, source, payload):
-    data = createJSON({"destination": destination, "payload": payload, "source": source}, "data")
+    data = createJSON({"destination": destination,
+                      "payload": payload, "source": source}, "data")
     socket.sendto(bytes(data, "UTF-8"), (shortest, PORT))
-    
+
 # Função que envia um trace a um endereço
 def sendTrace(shortest, destination, source, hops):
     hops.append(ADDR)
-    data = createJSON({"destination": destination, "hops": hops, "source": source}, "trace")
+    data = createJSON({"destination": destination,
+                      "hops": hops, "source": source}, "trace")
     socket.sendto(bytes(data, "UTF-8"), (shortest, PORT))
 
 # Busca o caminho mais curto com algorítmo de dijsktra
 def getShortestFromSelf(destination):
     G = nx.Graph()
     for route in routes:
-        G.add_edge(ADDR, route["addr"], weight = float(route["weight"]))
+        G.add_edge(ADDR, route["addr"], weight=float(route["weight"]))
     for top in routeTable:
         if top != ADDR:
             for sub in routeTable[top]:
                 wei = routeTable[top][sub]
-                G.add_edge(top, sub, weight = float(wei))
+                G.add_edge(top, sub, weight=float(wei))
 
     obj = single_source_dijkstra(G, ADDR, destination)
     distance, shortest = obj
@@ -184,7 +250,8 @@ def getShortestFromSelf(destination):
     elif distance == 0:
         return (distance, shortest[0])
     else:
-        printError("Caminho não encontrado", "Calculo de menor distância não deu certo")
+        printError("Caminho não encontrado",
+                   "Calculo de menor distância não deu certo")
         return (-1, "erro")
 
 # Espera o comando do usuario
@@ -195,38 +262,51 @@ while command not in ["q", "quit"]:
 
     if command == 'add':
         weight = args[1]
-        if not any(x for x in routes if x["addr"] == address):
-            routes.append({"addr": address, "weight": weight})
-            printSuccess("Endereço adicionado!")
-            printAddressList(routes)
+        printSuccess("args - ADDR: {} - {}".format(args, ADDR))
+        if address != ADDR:
+            if not any(x for x in routes if x["addr"] == address):
+                routes.append({"addr": address, "weight": weight})
+                printSuccess("Endereço adicionado!")
+                printAddressList(routes)
+            else:
+                printError("Endereço já existe na lista!")
         else:
-            printError("Endereço já existe na lista!")
+            printError("Você não pode adicionar o IP do próprio roteador!")
+        
+            
     elif command == 'del':
-        index = next((x for x, item in enumerate(routes) if item["addr"] == address), None)
+        index = next((x for x, item in enumerate(routes)
+                     if item["addr"] == address), None)
         if index != None:
             routes.pop(index)
             printSuccess("Endereço removido!")
             printAddressList(routes)
         else:
             printError("Endereço não existe na lista!")
+            
     elif command == 'trace':
-        printSuccess("Trace!")
-        distance, shortest = getShortestFromSelf(address)
-        if shortest and distance > 0:
-            sendTrace(shortest, address, ADDR, [])
-        elif distance == 0:
-            printError("Próprio endereço", "Você enviou uma mensagem para o próprio roteador")
+        if address != ADDR:
+            distance, shortest = getShortestFromSelf(address)
+            if shortest and distance > 0:
+                sendTrace(shortest, address, ADDR, [])
+            else:
+                printError("Destino não encontrado",
+                       "Não foi possível traçar uma rota para o destino escolhido")
         else:
-            printError("Destino não encontrado", "Não foi possível traçar uma rota para o destino escolhido")
+            printError("Próprio endereço",
+                       "Você não pode enviar um trace para o próprio roteador")
+            
     elif command == 'send':
         payload = args[1:]
         distance, shortest = getShortestFromSelf(address)
         if shortest and distance > 0:
             sendPayload(shortest, address, ADDR, payload)
         elif distance == 0:
-            printError("Próprio endereço", "Você enviou uma mensagem para o próprio roteador")
+            printError("Próprio endereço",
+                       "Você enviou uma mensagem para o próprio roteador")
         else:
-            printError("Destino não encontrado", "Não foi possível traçar uma rota para o destino escolhido")
+            printError("Destino não encontrado",
+                       "Não foi possível traçar uma rota para o destino escolhido")
     else:
         printError("Comando desconhecido - {}".format(command),
                    "Tente 'add', 'del', 'trace', 'send' ou 'quit'")
